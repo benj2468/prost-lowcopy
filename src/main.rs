@@ -17,8 +17,9 @@ struct Person {
     pub digits: Vec<u32>, // tag=8
     #[prost(enumeration = "Gender")]
     pub gender: i32, // tag=9
+    #[prost(message, repeated)]
+    pub friends: Vec<Person>, // tag=10
 }
-
 fn decode_varint_slow(buf: &[u8]) -> Result<(u64, usize), DecodeError> {
     let mut value = 0;
     let mut idx = 0;
@@ -195,12 +196,13 @@ pub struct PersonObserver<'a> {
     id: Option<usize>,
     given_name: Option<usize>,
     // Sized repeating fields that are not packed
-    // I feel like there is no way to do this... 
+    // I feel like there is no way to do this...
     // without needing to iterate over the entire buffer again...
     middle_names: Vec<usize>,
     // A packed repeating field
     digits: Option<usize>,
-    gender: Gender
+    gender: Gender,
+    friends: Vec<usize>,
 }
 
 impl<'a> Debug for PersonObserver<'a> {
@@ -211,6 +213,7 @@ impl<'a> Debug for PersonObserver<'a> {
             .field("middle_names", &self.middle_names())
             .field("digits", &self.digits())
             .field("gender", &self.gender)
+            .field("friends", &self.friends())
             .finish()
     }
 }
@@ -259,9 +262,16 @@ impl<'a> PersonObserver<'a> {
             if tag == 9 {
                 offset += next_offset;
                 let (r, shift) = decode_varint(&buf[offset..])?;
-                res.gender = Gender::try_from(r as i32)
-                    .map_err(|e| DecodeError::new(e.to_string()))?;
+                res.gender =
+                    Gender::try_from(r as i32).map_err(|e| DecodeError::new(e.to_string()))?;
                 offset += shift;
+            }
+
+            if tag == 10 {
+                offset += next_offset;
+                res.friends.push(offset);
+                let (length, delim_offset) = decode_length_delimiter(&buf[offset..])?;
+                offset += delim_offset + length;
             }
         }
 
@@ -296,6 +306,17 @@ impl<'a> PersonObserver<'a> {
     pub fn gender(&'a self) -> Gender {
         self.gender
     }
+
+    pub fn friends(&'a self) -> Vec<PersonObserver<'a>> {
+        self.friends
+            .iter()
+            .map(|p| {
+                let (length, shift) = decode_length_delimiter(&self.inner[*p..]).unwrap();
+                let start = *p + shift;
+                PersonObserver::new(&self.inner[start..(start + length)]).unwrap()
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Enumeration)]
@@ -306,13 +327,31 @@ pub enum Gender {
 }
 
 fn main() {
+    let p2 = Person {
+        id: "apple".into(),
+        given_name: "Steve".into(),
+        middle_names: vec!["Paul".into()],
+        digits: vec![3, 4, 5],
+        gender: Gender::Male as i32,
+        ..Default::default()
+    };
+
+    let p3 = Person {
+        id: "microsoft".into(),
+        given_name: "William".into(),
+        middle_names: vec!["Henry".into()],
+        digits: vec![6, 7, 8],
+        gender: Gender::Male as i32,
+        ..Default::default()
+    };
+
     let p = Person {
-        id: "foobar".into(),
-        given_name: "Benjamin".into(),
-        middle_names: vec!["Joseph".into(), "Joe".into()],
+        id: "anduril".into(),
+        given_name: "Palmer".into(),
+        middle_names: vec!["Freeman".into()],
         digits: vec![1, 2, 3],
         gender: Gender::Male as i32,
-        // ..Default::default()
+        friends: vec![p2, p3]
     };
 
     let bytes = p.encode_to_vec();
